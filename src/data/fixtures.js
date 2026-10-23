@@ -59,7 +59,7 @@ export const FIXTURE_DEFS = [
   {
     id: 'demo-northstar',
     displayName: 'Northstar',
-    exchangeId: 'binance',
+    exchangeId: 'demo-alpha',
     strategy: 'Trend following',
     markets: ['BTC', 'ETH'],
     horizon: 'Swing',
@@ -68,7 +68,7 @@ export const FIXTURE_DEFS = [
   {
     id: 'demo-orbit',
     displayName: 'Orbit',
-    exchangeId: 'bybit',
+    exchangeId: 'demo-beta',
     strategy: 'Momentum',
     markets: ['BTC', 'SOL'],
     horizon: 'Short-term',
@@ -77,7 +77,7 @@ export const FIXTURE_DEFS = [
   {
     id: 'demo-harbor',
     displayName: 'Harbor',
-    exchangeId: 'okx',
+    exchangeId: 'demo-gamma',
     strategy: 'Steady allocation',
     markets: ['BTC', 'ETH'],
     horizon: 'Long-term',
@@ -86,7 +86,7 @@ export const FIXTURE_DEFS = [
   {
     id: 'demo-pulse',
     displayName: 'Pulse',
-    exchangeId: 'bitget',
+    exchangeId: 'demo-alpha',
     strategy: 'Mean reversion',
     markets: ['ETH', 'SOL'],
     horizon: 'Intraday',
@@ -95,7 +95,7 @@ export const FIXTURE_DEFS = [
   {
     id: 'demo-vector',
     displayName: 'Vector',
-    exchangeId: 'deribit',
+    exchangeId: 'demo-beta',
     strategy: 'Options carry',
     markets: ['BTC'],
     horizon: 'Swing',
@@ -104,7 +104,7 @@ export const FIXTURE_DEFS = [
   {
     id: 'demo-glide',
     displayName: 'Glide',
-    exchangeId: 'bingx',
+    exchangeId: 'demo-gamma',
     strategy: 'Grid',
     markets: ['BTC', 'ETH'],
     horizon: 'Short-term',
@@ -113,7 +113,7 @@ export const FIXTURE_DEFS = [
   {
     id: 'demo-ember',
     displayName: 'Ember',
-    exchangeId: 'binance',
+    exchangeId: 'demo-alpha',
     strategy: 'Breakout',
     markets: ['SOL'],
     horizon: 'Intraday',
@@ -122,7 +122,7 @@ export const FIXTURE_DEFS = [
   {
     id: 'demo-lantern',
     displayName: 'Lantern',
-    exchangeId: 'okx',
+    exchangeId: 'demo-gamma',
     strategy: 'Basis trading',
     markets: ['BTC', 'ETH'],
     horizon: 'Long-term',

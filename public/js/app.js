@@ -105,11 +105,7 @@ async function openProfile(t) {
   track({ type: 'profile_view', traderId: t.id, exchangeId: t.exchangeId });
   try {
     const [{ data }, perf] = await Promise.all([fetchTrader(t.id), fetchPerformance(t.id)]);
-    body.replaceChildren(
-      profileBody(data, perf.data.series, () =>
-        track({ type: 'outbound_click', traderId: t.id, exchangeId: t.exchangeId }),
-      ),
-    );
+    body.replaceChildren(profileBody(data, perf.data.series));
   } catch (e) {
     body.replaceChildren(
       el('p', { text: e instanceof Error ? e.message : 'Profile unavailable.' }),

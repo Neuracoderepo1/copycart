@@ -24,8 +24,9 @@ test('text search matches name, strategy and market case-insensitively', async (
 
 test('exchange and risk filters combine', async () => {
   const s = store();
-  const okx = await s.listTraders({ exchange: 'okx' });
-  assert.ok(okx.rows.length > 0 && okx.rows.every((r) => r.exchangeId === 'okx'));
+  const alpha = await s.listTraders({ exchange: 'demo-alpha' });
+  assert.ok(alpha.rows.length > 0 && alpha.rows.every((r) => r.exchangeId === 'demo-alpha'));
+  assert.equal((await s.listTraders({ exchange: 'okx' })).total, 0, 'planned exchange has no data');
   const high = await s.listTraders({ risk: 'High' });
   assert.ok(high.rows.every((r) => r.riskLabel === 'High'));
 });
