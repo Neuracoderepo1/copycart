@@ -1,0 +1,88 @@
+// Flat ESLint config. Deliberately has no third-party imports so it works offline.
+const nodeGlobals = {
+  process: 'readonly',
+  console: 'readonly',
+  Buffer: 'readonly',
+  URL: 'readonly',
+  URLSearchParams: 'readonly',
+  AbortController: 'readonly',
+  AbortSignal: 'readonly',
+  setTimeout: 'readonly',
+  clearTimeout: 'readonly',
+  setInterval: 'readonly',
+  clearInterval: 'readonly',
+  structuredClone: 'readonly',
+  TextEncoder: 'readonly',
+  fetch: 'readonly',
+};
+
+const browserGlobals = {
+  window: 'readonly',
+  document: 'readonly',
+  navigator: 'readonly',
+  location: 'readonly',
+  history: 'readonly',
+  sessionStorage: 'readonly',
+  fetch: 'readonly',
+  crypto: 'readonly',
+  URL: 'readonly',
+  URLSearchParams: 'readonly',
+  AbortController: 'readonly',
+  setTimeout: 'readonly',
+  clearTimeout: 'readonly',
+  Intl: 'readonly',
+  console: 'readonly',
+  HTMLElement: 'readonly',
+  HTMLDialogElement: 'readonly',
+  HTMLInputElement: 'readonly',
+  HTMLSelectElement: 'readonly',
+  Element: 'readonly',
+  Event: 'readonly',
+  SVGElement: 'readonly',
+  requestAnimationFrame: 'readonly',
+  matchMedia: 'readonly',
+};
+
+const rules = {
+  'no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
+  'no-undef': 'error',
+  'no-var': 'error',
+  'prefer-const': 'error',
+  eqeqeq: ['error', 'always'],
+  'no-implicit-coercion': ['error', { allow: ['!!'] }],
+  'no-throw-literal': 'error',
+  'no-eval': 'error',
+  'no-implied-eval': 'error',
+  'no-new-func': 'error',
+  'no-console': 'off',
+  'no-empty': ['error', { allowEmptyCatch: false }],
+  'no-fallthrough': 'error',
+  'no-unreachable': 'error',
+  'no-self-compare': 'error',
+  'no-shadow-restricted-names': 'error',
+  'no-useless-catch': 'error',
+  'require-atomic-updates': 'off',
+};
+
+export default [
+  { ignores: ['node_modules/**', 'docs/openapi.json', 'public/js/tsconfig.json'] },
+  {
+    files: ['src/**/*.js', 'tests/**/*.js', 'scripts/**/*.js', 'eslint.config.js'],
+    languageOptions: { ecmaVersion: 2023, sourceType: 'module', globals: nodeGlobals },
+    rules,
+  },
+  {
+    files: ['public/js/**/*.js'],
+    languageOptions: { ecmaVersion: 2023, sourceType: 'module', globals: browserGlobals },
+    rules,
+  },
+  {
+    files: ['scripts/**/*.cjs'],
+    languageOptions: {
+      ecmaVersion: 2023,
+      sourceType: 'commonjs',
+      globals: { ...nodeGlobals, require: 'readonly', module: 'readonly', __dirname: 'readonly' },
+    },
+    rules,
+  },
+];
