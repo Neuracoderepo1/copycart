@@ -30,13 +30,19 @@ Node.js 22+. ES modules, JSDoc + strict `tsc`, no runtime dependencies.
 | `src/server.js`    | HTTP server, static files, security headers                          |
 | `public/`          | Browser UI (plain ES modules, no framework)                          |
 
-## Scoring (v0.1.0-provisional)
+## Scoring (v0.2.0-provisional)
 
 0-100 descriptive score of an observed record: risk-adjusted return 35%, drawdown 25%, consistency
-20%, data reliability 20%. Weights are **provisional and unvalidated**; the score does not predict
-profit. Fewer than 30 valid observations yields no score. Zero variance, invalid values, stale or
-gappy data are handled explicitly and reported as flags. Flags are statistical prompts, not
-accusations. See `GET /api/v1/methodology`.
+20%, data reliability 20%. Weights and caps are **provisional and unvalidated**; the score does not
+predict profit.
+
+- Fewer than 30 valid observations: **no score** (`null`), never a zero.
+- A component that cannot be computed (e.g. zero variance) contributes 0 points. Weights are never
+  renormalized, so missing evidence cannot raise a score.
+- Caps when evidence is thin: under 60 observations caps at 60, under 90 at 80, and unusually
+  smooth (unverified) returns cap at 75. Caps are returned in `caps` with `rawScore`.
+- Conflicting duplicate timestamps are excluded and flagged; identical duplicates collapse and are
+  flagged. Flags are statistical prompts, not accusations. See `GET /api/v1/methodology`.
 
 ## API (`/api/v1`)
 
@@ -57,15 +63,18 @@ on the exchange's own domain, otherwise the redirect is refused). Never commit `
 
 ## Referral analytics
 
-Events: `profile_view`, `search`, `filter`, `compare`, `outbound_click`. No IPs, cookies, user agents
+Events: `profile_view`, `search`, `filter`, `compare` (browser) and `outbound_click` (recorded only by
+the server redirect, so each click is counted once). Privileged calls (`/analytics/summary`) are
+audit-logged. No IPs, cookies, user agents
 or search text are stored; UTM values are sanitised. Outbound clicks are click-only; **no conversion
 is reported** until verified partner data exists. The event buffer is in memory and resets on restart.
 
 ## Exchange adapters
 
+Demo traders live on fictional `demo-alpha/beta/gamma` exchanges and have no outbound link.
 Binance, Bybit, OKX, Bitget, BingX and Deribit are registered as **planned** and return no data.
-Before enabling any, verify and document: API access and authentication, rate limits, historical
-coverage, and commercial redistribution terms. Nothing here has been verified.
+Nothing about their APIs or terms is verified. See `docs/ADAPTERS.md` for the checklist and
+`docs/COMPLIANCE.md` for items needing legal review.
 
 ## Not done / limits
 

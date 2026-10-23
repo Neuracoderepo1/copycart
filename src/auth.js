@@ -22,6 +22,30 @@ export function isValidKey(presented, hashes) {
   return ok;
 }
 
+/**
+ * Audit trail for privileged operations. Records who (a short key fingerprint, never the key),
+ * what, and the outcome. No IPs or request bodies. In memory and stdout only; ship stdout to a
+ * durable log sink in production.
+ * @param {{ sink?: (line: string) => void, max?: number }} [opts]
+ */
+export function createAudit(opts = {}) {
+  const sink = opts.sink ?? ((line) => console.log(line));
+  const max = opts.max ?? 1000;
+  /** @type {Array<{ at: string, action: string, outcome: 'allowed' | 'denied', actor: string }>} */
+  const entries = [];
+  return {
+    entries,
+    /** @param {string} action @param {'allowed' | 'denied'} outcome @param {string | undefined} key */
+    record(action, outcome, key) {
+      const actor = key && /^cc_/.test(key) ? `key:${hashKey(key).slice(0, 8)}` : 'anonymous';
+      const entry = { at: new Date().toISOString(), action, outcome, actor };
+      entries.push(entry);
+      if (entries.length > max) entries.shift();
+      sink(JSON.stringify({ audit: entry }));
+    },
+  };
+}
+
 /** Fixed-window in-memory rate limiter. @param {number} windowMs @param {() => number} [now] */
 export function createRateLimiter(windowMs = 60_000, now = Date.now) {
   /** @type {Map<string, { start: number, count: number }>} */

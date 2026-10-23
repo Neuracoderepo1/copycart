@@ -48,7 +48,7 @@ export function traderCard(t, h) {
     el('h3', { text: t.displayName }),
     el('p', {
       class: 'strategy',
-      text: `${t.strategy} · ${t.markets.join(' / ')} · ${t.exchangeId}`,
+      text: `${t.strategy} · ${t.markets.join(' / ')} · ${t.exchangeName}`,
     }),
     el('div', { class: 'score-line' }, [
       el('div', {}, [
@@ -176,16 +176,27 @@ export function metricGrid(t, s) {
  * Profile body. Outbound link is a same-origin URL; the server validates the destination.
  * @param {Trader & { score: Score }} t
  * @param {Array<{ ts: string, cumulativeReturn: number }>} series
- * @param {() => void} onOutbound
  */
-export function profileBody(t, series, onOutbound) {
+export function profileBody(t, series) {
   const s = t.score;
-  const link = el('a', {
-    class: 'button secondary outbound',
-    text: `Open ${t.exchangeId} (outbound link) ↗`,
-    attrs: { href: outboundUrl(t.exchangeId, t.id), rel: 'noopener noreferrer', target: '_blank' },
-  });
-  link.addEventListener('click', onOutbound);
+  // The click is recorded server-side by the redirect endpoint (one authoritative count), so the
+  // browser does not also post an outbound_click event.
+  const link = t.outboundAvailable
+    ? el('a', {
+        class: 'button secondary outbound',
+        text: `Open ${t.exchangeName} (outbound link) ↗`,
+        attrs: {
+          href: outboundUrl(t.exchangeId, t.id),
+          rel: 'noopener noreferrer',
+          target: '_blank',
+        },
+      })
+    : el('p', {
+        class: 'fineprint outbound-unavailable',
+        text: t.isDemo
+          ? 'No outbound link: this is a synthetic demo profile on a fictional exchange.'
+          : 'No outbound link is available for this exchange.',
+      });
   return el('div', {}, [
     el('p', { text: `${t.strategy} · ${t.markets.join(' / ')} · ${t.horizon}` }),
     sourceChips(t),
@@ -198,7 +209,16 @@ export function profileBody(t, series, onOutbound) {
       }),
     ]),
     s.status === 'scored'
-      ? el('div', {}, [el('h3', { text: `Score ${s.score}/100` }), componentBars(s)])
+      ? el('div', {}, [
+          el('h3', { text: `Score ${s.score}/100` }),
+          ...s.caps.map((c) =>
+            el('p', {
+              class: 'fineprint cap-note',
+              text: `Capped at ${c.limit}${s.rawScore !== null ? ` (uncapped ${s.rawScore})` : ''}: ${c.reason}`,
+            }),
+          ),
+          componentBars(s),
+        ])
       : el('p', { text: 'A score is unavailable because there is not enough valid history.' }),
     metricGrid(t, s),
     curve(series),
@@ -224,7 +244,7 @@ export function profileBody(t, series, onOutbound) {
 export function compareTable(ts) {
   /** @type {Array<[string, (t: Trader & { score: Score }) => string]>} */
   const rows = [
-    ['Exchange', (t) => t.exchangeId],
+    ['Exchange', (t) => t.exchangeName],
     ['Score (provisional)', (t) => (t.score.score === null ? '—' : String(t.score.score))],
     ['Risk label', (t) => t.riskLabel],
     ['Total return', (t) => pct(t.score.metrics.totalReturn)],

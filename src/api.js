@@ -1,9 +1,9 @@
 import { ROUTES, compile } from './routes.js';
 import { describeMethodology, SCORING_VERSION } from './scoring.js';
-import { EXCHANGES } from './adapters/index.js';
+import { ALL_EXCHANGES } from './adapters/index.js';
 import { performanceSeries } from './data/store.js';
 import { validateEvent, resolveOutbound, sanitizeUtm } from './analytics.js';
-import { isValidKey } from './auth.js';
+import { isValidKey, createAudit } from './auth.js';
 
 /**
  * @typedef {{ status: number, body?: unknown, headers?: Record<string, string> }} ApiResult
@@ -25,8 +25,9 @@ const compiled = ROUTES.map((r) => ({ route: r, ...compile(r.path) }));
  * @param {ReturnType<typeof import('./data/store.js').createStore>} store
  * @param {ReturnType<typeof import('./analytics.js').createAnalytics>} analytics
  * @param {ReturnType<typeof import('./auth.js').createRateLimiter>} limiter
+ * @param {ReturnType<typeof import('./auth.js').createAudit>} [audit]
  */
-export function createApi(config, store, analytics, limiter) {
+export function createApi(config, store, analytics, limiter, audit = createAudit()) {
   /** @param {string | null} v @param {number} d */
   const intParam = (v, d) => {
     if (v === null || v === '') return d;
@@ -66,13 +67,13 @@ export function createApi(config, store, analytics, limiter) {
     const presentedRaw = req.headers['x-api-key'];
     const presented = Array.isArray(presentedRaw) ? presentedRaw[0] : presentedRaw;
     const keyOk = presented !== undefined && isValidKey(presented, config.apiKeyHashes);
-    if (presented !== undefined && !keyOk)
+    const privileged = matched.auth === 'required';
+    if (presented !== undefined && !keyOk) {
+      if (privileged) audit.record(matched.operationId, 'denied', presented);
       return err(401, 'invalid_api_key', 'API key is invalid.');
-    if (
-      (matched.auth === 'required' || config.requireKey) &&
-      !keyOk &&
-      matched.operationId !== 'getHealth'
-    ) {
+    }
+    if ((privileged || config.requireKey) && !keyOk && matched.operationId !== 'getHealth') {
+      if (privileged) audit.record(matched.operationId, 'denied', undefined);
       return err(401, 'api_key_required', 'A valid X-API-Key header is required.');
     }
 
@@ -119,7 +120,7 @@ export function createApi(config, store, analytics, limiter) {
       case 'listExchanges':
         return {
           status: 200,
-          body: { data: EXCHANGES, note: 'No live exchange adapter is enabled in this build.' },
+          body: { data: ALL_EXCHANGES, note: 'No live exchange adapter is enabled in this build.' },
         };
       case 'listTraders': {
         const u = req.url;
@@ -144,7 +145,7 @@ export function createApi(config, store, analytics, limiter) {
         return {
           status: 200,
           body: {
-            data: r.rows.map(summary),
+            data: r.rows.map((t) => summary(t, config.env)),
             page: r.page,
             pageSize: r.pageSize,
             total: r.total,
@@ -159,7 +160,7 @@ export function createApi(config, store, analytics, limiter) {
         const t = await store.getTrader(params.id);
         if (!t) return err(404, 'trader_not_found', 'Trader not found.');
         if (op === 'getTrader')
-          return { status: 200, body: { data: { ...summary(t), score: t.score } } };
+          return { status: 200, body: { data: { ...summary(t, config.env), score: t.score } } };
         if (op === 'getTraderScore')
           return { status: 200, body: { data: t.score, methodologyVersion: t.score.version } };
         return {
@@ -190,6 +191,16 @@ export function createApi(config, store, analytics, limiter) {
           ),
         );
         const trader = req.url.searchParams.get('trader') ?? undefined;
+        // A synthetic demo trader must never be attributed to a real exchange destination.
+        if (trader && /^[a-z0-9-]{1,64}$/.test(trader)) {
+          const known = await store.getTrader(trader);
+          if (known && known.source.kind === 'demo')
+            return err(
+              404,
+              'outbound_unavailable_for_demo',
+              'Demo traders have no outbound destination.',
+            );
+        }
         analytics.record({
           type: 'outbound_click',
           at: new Date().toISOString(),
@@ -198,9 +209,17 @@ export function createApi(config, store, analytics, limiter) {
           ...(Object.keys(utm).length ? { utm } : {}),
           attribution: 'click_only',
         });
-        return { status: 302, headers: { location: dest, 'cache-control': 'no-store' } };
+        return {
+          status: 302,
+          headers: {
+            location: dest,
+            'cache-control': 'no-store',
+            'referrer-policy': 'no-referrer',
+          },
+        };
       }
       case 'analyticsSummary':
+        audit.record('analyticsSummary', 'allowed', String(req.headers['x-api-key']));
         return { status: 200, body: analytics.summary() };
       default:
         return err(404, 'not_found', 'Route not found.');
@@ -210,12 +229,14 @@ export function createApi(config, store, analytics, limiter) {
   return { handle };
 }
 
-/** @param {import('./data/store.js').TraderRecord} t */
-function summary(t) {
+/** @param {import('./data/store.js').TraderRecord} t @param {NodeJS.ProcessEnv} env */
+function summary(t, env) {
   return {
     id: t.id,
     displayName: t.displayName,
     exchangeId: t.exchangeId,
+    exchangeName: ALL_EXCHANGES.find((e) => e.id === t.exchangeId)?.name ?? t.exchangeId,
+    outboundAvailable: t.source.kind !== 'demo' && resolveOutbound(t.exchangeId, env) !== null,
     strategy: t.strategy,
     markets: t.markets,
     horizon: t.horizon,
