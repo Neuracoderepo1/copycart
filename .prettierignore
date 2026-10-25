@@ -1,3 +1,5 @@
 node_modules/
 docs/openapi.json
 public/styles.css
+test-results/
+playwright-report/

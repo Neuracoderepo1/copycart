@@ -65,7 +65,15 @@ const rules = {
 };
 
 export default [
-  { ignores: ['node_modules/**', 'docs/openapi.json', 'public/js/tsconfig.json'] },
+  {
+    ignores: [
+      'node_modules/**',
+      'docs/openapi.json',
+      'public/js/tsconfig.json',
+      'test-results/**',
+      'playwright-report/**',
+    ],
+  },
   {
     files: ['src/**/*.js', 'tests/**/*.js', 'scripts/**/*.js', 'eslint.config.js'],
     languageOptions: { ecmaVersion: 2023, sourceType: 'module', globals: nodeGlobals },
@@ -74,6 +82,15 @@ export default [
   {
     files: ['public/js/**/*.js'],
     languageOptions: { ecmaVersion: 2023, sourceType: 'module', globals: browserGlobals },
+    rules,
+  },
+  {
+    files: ['e2e/**/*.js', 'playwright.config.js'],
+    languageOptions: {
+      ecmaVersion: 2023,
+      sourceType: 'module',
+      globals: { ...nodeGlobals, document: 'readonly', window: 'readonly' },
+    },
     rules,
   },
   {
