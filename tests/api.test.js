@@ -50,7 +50,22 @@ test('methodology and exchanges expose provisional status and planned adapters',
   const m = await callJson('/api/v1/methodology');
   assert.equal(m.status, 'provisional');
   const e = await callJson('/api/v1/exchanges');
-  assert.ok(e.data.every((/** @type {{status: string}} */ x) => x.status === 'planned'));
+  const byStatus = (/** @type {string} */ s) =>
+    e.data.filter((/** @type {{status: string}} */ x) => x.status === s);
+  assert.equal(byStatus('live').length, 0, 'no live adapter may be claimed');
+  assert.equal(byStatus('planned').length, 6);
+  assert.ok(byStatus('demo').every((/** @type {{id: string}} */ x) => x.id.startsWith('demo-')));
+});
+
+test('no synthetic trader is attributed to a real exchange or offers an outbound link', async () => {
+  const real = new Set(['binance', 'bybit', 'okx', 'bitget', 'bingx', 'deribit']);
+  const list = await callJson('/api/v1/traders?pageSize=50');
+  assert.ok(list.data.length > 0);
+  for (const t of list.data) {
+    assert.ok(!real.has(t.exchangeId), `${t.id} must not sit on ${t.exchangeId}`);
+    assert.equal(t.outboundAvailable, false);
+    assert.match(t.exchangeName, /fictional/);
+  }
 });
 
 test('traders list, detail, performance and score endpoints', async () => {
@@ -154,8 +169,12 @@ test('events: accepts valid, rejects invalid, enforces JSON type and size', asyn
 });
 
 test('outbound redirect: allow-listed, records click, never a conversion', async () => {
-  const r = await call('/api/v1/outbound/bybit?trader=demo-orbit&utm_source=t&utm_campaign=c1');
+  const r = await call('/api/v1/outbound/bybit?utm_source=t&utm_campaign=c1');
   assert.equal(r.status, 302);
+  assert.equal(r.headers.get('referrer-policy'), 'no-referrer');
+  // A synthetic demo trader can never be attributed to a real exchange destination.
+  assert.equal((await call('/api/v1/outbound/bybit?trader=demo-orbit')).status, 404);
+  assert.equal((await call('/api/v1/outbound/demo-alpha')).status, 404);
   assert.ok(new URL(r.headers.get('location') ?? '').hostname.endsWith('bybit.com'));
   assert.equal((await call('/api/v1/outbound/evil.com')).status, 404);
   assert.equal((await call('/api/v1/outbound/%2F%2Fevil.com')).status, 404);
@@ -207,4 +226,39 @@ test('unexpected errors do not leak internals', async () => {
   const r = await call('/api/v1/traders/' + 'a'.repeat(200));
   const text = await r.text();
   assert.doesNotMatch(text, /at .*\.js|node_modules|stack/i);
+});
+
+test('privileged endpoint access is audit-logged without leaking the key or caller address', async () => {
+  /** @type {string[]} */
+  const lines = [];
+  const { server: s, audit } = createAppServer(
+    { apiKeyHashes: [hashKey(KEY)], rateLimitAnon: 1000 },
+    { auditSink: (l) => lines.push(l) },
+  );
+  const url = /** @type {string} */ (await listen(s));
+  try {
+    assert.equal((await fetch(`${url}/api/v1/analytics/summary`)).status, 401);
+    assert.equal(
+      (await fetch(`${url}/api/v1/analytics/summary`, { headers: { 'x-api-key': KEY } })).status,
+      200,
+    );
+    assert.deepEqual(
+      audit.entries.map((e) => [e.action, e.outcome]),
+      [
+        ['analyticsSummary', 'denied'],
+        ['analyticsSummary', 'allowed'],
+      ],
+    );
+    assert.match(audit.entries[1].actor, /^key:[0-9a-f]{8}$/);
+    assert.equal(audit.entries[0].actor, 'anonymous');
+    const raw = lines.join('\n');
+    assert.ok(!raw.includes(KEY), 'raw key must never be logged');
+    assert.ok(!/127\.0\.0\.1|::1/.test(raw), 'caller address must not be logged');
+    // Public endpoints are not privileged and create no audit noise.
+    await fetch(`${url}/api/v1/traders`);
+    assert.equal(audit.entries.length, 2);
+  } finally {
+    s.close();
+    s.closeAllConnections();
+  }
 });

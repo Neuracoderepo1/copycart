@@ -10,12 +10,14 @@
  *   positiveWindowShare: number | null, volatilityDaily: number | null
  * }} Metrics
  * @typedef {{
- *   version: string, status: string, score: number | null, confidence: string,
+ *   version: string, status: string, score: number | null, rawScore: number | null,
+ *   caps: Array<{ code: string, limit: number, reason: string }>, confidence: string,
  *   components: Component[], flags: Flag[], metrics: Metrics,
  *   dataQuality: { received: number, valid: number, dropped: number }
  * }} Score
  * @typedef {{
- *   id: string, displayName: string, exchangeId: string, strategy: string, markets: string[],
+ *   id: string, displayName: string, exchangeId: string, exchangeName: string,
+ *   outboundAvailable: boolean, strategy: string, markets: string[],
  *   horizon: string, riskLabel: string, score: number | null, scoreStatus: string,
  *   confidence: string, metrics: Metrics, flags: Flag[],
  *   source: { kind: string, name: string, note?: string },

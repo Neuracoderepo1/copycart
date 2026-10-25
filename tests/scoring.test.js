@@ -8,6 +8,7 @@ import {
   totalReturn,
   cleanObservations,
   MIN_OBSERVATIONS,
+  CAPS,
 } from '../src/scoring.js';
 import { synthSeries } from '../src/data/fixtures.js';
 
@@ -19,6 +20,7 @@ const series = (o = {}) =>
   synthSeries({ seed: 1, n: 120, drift: 0.002, vol: 0.015, endDate: END, ...o });
 
 test('weights sum to 1 and version is provisional', () => {
+  assert.equal(SCORING_VERSION, '0.2.0-provisional');
   assert.ok(Math.abs(Object.values(WEIGHTS).reduce((a, b) => a + b, 0) - 1) < 1e-9);
   assert.match(SCORING_VERSION, /provisional/);
 });
@@ -68,20 +70,76 @@ test('invalid values are dropped and reported', () => {
   assert.equal(r.status, 'scored');
 });
 
-test('duplicate timestamps keep one observation (last wins)', () => {
+test('identical duplicate timestamps collapse to one and are flagged', () => {
   const s = series({ n: 40 });
-  const { obs } = cleanObservations([...s, { ts: s[5].ts, ret: 0.5 }]);
-  assert.equal(obs.length, 40);
-  assert.equal(obs.find((o) => o.t === Date.parse(s[5].ts))?.ret, 0.5);
+  const r = scoreTrader([...s, { ...s[5] }, { ...s[5] }], demo, { asOf: END });
+  assert.equal(r.dataQuality.valid, 40);
+  assert.equal(r.dataQuality.exactDuplicates, 2);
+  assert.ok(r.flags.some((f) => f.code === 'duplicate_timestamps'));
 });
 
-test('zero variance: risk-adjusted component is null and weight is renormalized', () => {
+test('conflicting duplicate timestamps are excluded, not silently resolved', () => {
+  const s = series({ n: 40 });
+  const { obs, conflictingTimestamps } = cleanObservations([...s, { ts: s[5].ts, ret: 0.5 }]);
+  assert.equal(conflictingTimestamps, 1);
+  assert.equal(obs.length, 39);
+  assert.ok(!obs.some((o) => o.t === Date.parse(s[5].ts)));
+  const r = scoreTrader([...s, { ts: s[5].ts, ret: 0.5 }], demo, { asOf: END });
+  assert.ok(r.flags.some((f) => f.code === 'conflicting_timestamps'));
+});
+
+test('zero variance: component is null, counts as 0 points, weights are NOT renormalized', () => {
   const flat = series().map((o) => ({ ...o, ret: 0.001 }));
   const r = scoreTrader(flat, demo, { asOf: END });
   const rar = r.components.find((c) => c.key === 'riskAdjustedReturn');
   assert.equal(rar?.score, null);
   assert.equal(r.metrics.annualizedSharpe, null);
-  assert.ok(r.score !== null && Number.isFinite(r.score));
+  assert.ok(r.flags.some((f) => f.code === 'no_variance'));
+  const expected = Math.round(r.components.reduce((a, c) => a + (c.score ?? 0) * c.weight, 0));
+  assert.equal(r.rawScore, expected);
+  // The missing 35% can never be redistributed: the ceiling is 65 points.
+  assert.ok(/** @type {number} */ (r.score) <= 65);
+});
+
+test('missing evidence never raises a score: dormant series scores below a healthy one', () => {
+  const dormant = scoreTrader(
+    series().map((o) => ({ ...o, ret: 0 })),
+    live,
+    { asOf: END },
+  );
+  const healthy = scoreTrader(series(), live, { asOf: END });
+  assert.equal(dormant.metrics.totalReturn, 0, 'a true zero return stays 0, not null');
+  assert.equal(dormant.metrics.annualizedSharpe, null, 'undefined is distinct from zero');
+  assert.ok(/** @type {number} */ (dormant.score) < /** @type {number} */ (healthy.score));
+});
+
+test('short histories are capped and the cap is reported', () => {
+  const limited = scoreTrader(series({ n: 40 }), live, { asOf: END });
+  assert.equal(limited.status, 'scored');
+  assert.ok(/** @type {number} */ (limited.score) <= CAPS.limitedHistory.limit);
+  assert.ok(limited.caps.some((c) => c.code === 'limited_history'));
+  const short = scoreTrader(series({ n: 75 }), live, { asOf: END });
+  assert.ok(/** @type {number} */ (short.score) <= CAPS.shortHistory.limit);
+  assert.ok(short.caps.some((c) => c.code === 'short_history'));
+  const full = scoreTrader(series({ n: 120, drift: 0.0012, vol: 0.02 }), live, { asOf: END });
+  assert.equal(full.caps.length, 0);
+  assert.equal(full.score, full.rawScore);
+});
+
+test('unusually smooth returns are flagged and capped pending verification', () => {
+  const smooth = scoreTrader(series({ n: 150, drift: 0.0035, vol: 0.0012 }), live, { asOf: END });
+  assert.ok(smooth.flags.some((f) => f.code === 'unusually_smooth_returns'));
+  assert.ok(smooth.caps.some((c) => c.code === 'unverified_smoothness'));
+  assert.ok(/** @type {number} */ (smooth.score) <= CAPS.unverifiedSmoothness.limit);
+});
+
+test('large short-interval return is flagged with neutral wording', () => {
+  const s = series({ n: 60 });
+  const spiked = s.map((o, i) => (i >= 30 && i < 37 ? { ...o, ret: 0.09 } : o));
+  const r = scoreTrader(spiked, live, { asOf: END });
+  const f = r.flags.find((x) => x.code === 'large_short_interval_return');
+  assert.ok(f);
+  assert.doesNotMatch(f.message, /fraud|wash|manipulat|scam|cheat/i);
 });
 
 test('stale data lowers reliability and raises a flag', () => {

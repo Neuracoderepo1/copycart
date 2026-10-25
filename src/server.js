@@ -5,7 +5,7 @@ import { extname, join, normalize, sep } from 'node:path';
 import { loadConfig } from './config.js';
 import { createStore } from './data/store.js';
 import { createAnalytics } from './analytics.js';
-import { createRateLimiter } from './auth.js';
+import { createRateLimiter, createAudit } from './auth.js';
 import { createApi, err } from './api.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public/', import.meta.url));
@@ -32,14 +32,15 @@ const SECURITY_HEADERS = {
 
 /**
  * @param {Partial<import('./config.js').Config>} [overrides]
- * @param {{ now?: () => Date }} [deps]
+ * @param {{ now?: () => Date, auditSink?: (line: string) => void }} [deps]
  */
 export function createAppServer(overrides = {}, deps = {}) {
   const config = { ...loadConfig(), ...overrides };
   const store = createStore({ now: deps.now });
   const analytics = createAnalytics();
   const limiter = createRateLimiter();
-  const api = createApi(config, store, analytics, limiter);
+  const audit = createAudit({ sink: deps.auditSink });
+  const api = createApi(config, store, analytics, limiter, audit);
 
   /** @param {import('node:http').IncomingMessage} req */
   const clientId = (req) => {
@@ -122,7 +123,7 @@ export function createAppServer(overrides = {}, deps = {}) {
   });
   server.requestTimeout = 15_000;
   server.headersTimeout = 10_000;
-  return { server, config, store, analytics };
+  return { server, config, store, analytics, audit };
 }
 
 /** @param {string} pathname @param {boolean} headOnly @param {import('node:http').ServerResponse} res */

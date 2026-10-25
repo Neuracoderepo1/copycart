@@ -35,6 +35,35 @@ export const EXCHANGES = [
 ];
 
 /**
+ * Fictional exchanges that own the synthetic fixtures. Synthetic traders must never be attributed
+ * to a real exchange, so these have no outbound destination by design.
+ * @type {ExchangeInfo[]}
+ */
+export const DEMO_EXCHANGES = [
+  {
+    id: 'demo-alpha',
+    name: 'Demo Exchange Alpha (fictional)',
+    status: 'demo',
+    restrictions: 'Fictional venue for synthetic fixtures. No outbound destination.',
+  },
+  {
+    id: 'demo-beta',
+    name: 'Demo Exchange Beta (fictional)',
+    status: 'demo',
+    restrictions: 'Fictional venue for synthetic fixtures. No outbound destination.',
+  },
+  {
+    id: 'demo-gamma',
+    name: 'Demo Exchange Gamma (fictional)',
+    status: 'demo',
+    restrictions: 'Fictional venue for synthetic fixtures. No outbound destination.',
+  },
+];
+
+/** Everything the API reports under /exchanges. */
+export const ALL_EXCHANGES = [...DEMO_EXCHANGES, ...EXCHANGES];
+
+/**
  * Planned adapters intentionally return nothing and never fabricate data.
  * @param {ExchangeInfo} exchange
  * @returns {ExchangeAdapter}

@@ -2,7 +2,7 @@
 // Weights are PROVISIONAL: not validated against historical outcomes.
 // The score describes the quality of an observed record; it does not predict future profit.
 
-export const SCORING_VERSION = '0.1.0-provisional';
+export const SCORING_VERSION = '0.2.0-provisional';
 
 export const WEIGHTS = Object.freeze({
   riskAdjustedReturn: 0.35,
@@ -13,6 +13,15 @@ export const WEIGHTS = Object.freeze({
 
 export const MIN_OBSERVATIONS = 30;
 export const TARGET_OBSERVATIONS = 90;
+/** Provisional ceilings applied when evidence is thin. Not statistically validated. */
+export const CAPS = Object.freeze({
+  /** fewer than 60 valid observations */
+  limitedHistory: { below: 60, limit: 60 },
+  /** fewer than TARGET_OBSERVATIONS valid observations */
+  shortHistory: { below: TARGET_OBSERVATIONS, limit: 80 },
+  /** unusually smooth returns that have not been verified against raw statements */
+  unverifiedSmoothness: { limit: 75 },
+});
 const DAY_MS = 86_400_000;
 const WINDOW = 7;
 
@@ -24,11 +33,14 @@ const WINDOW = 7;
  *   value: number | null, explanation: string
  * }} Component
  * @typedef {{ code: string, severity: 'info' | 'caution', message: string }} Flag
+ * @typedef {{ code: string, limit: number, reason: string }} Cap
  * @typedef {{
  *   version: string, status: 'scored' | 'insufficient_history' | 'unscorable',
- *   score: number | null, confidence: 'high' | 'medium' | 'low' | 'demo',
+ *   score: number | null, rawScore: number | null, caps: Cap[],
+ *   confidence: 'high' | 'medium' | 'low' | 'demo',
  *   components: Component[], flags: Flag[],
- *   metrics: Metrics, dataQuality: { received: number, valid: number, dropped: number }
+ *   metrics: Metrics,
+ *   dataQuality: { received: number, valid: number, dropped: number, exactDuplicates: number, conflictingTimestamps: number }
  * }} ScoreResult
  * @typedef {{
  *   observations: number, periodDays: number | null, totalReturn: number | null,
@@ -48,24 +60,39 @@ function isFiniteNumber(n) {
 }
 
 /**
- * Drop invalid rows, sort by time, de-duplicate timestamps (keep last).
- * A return <= -100% is impossible for a long-only equity curve and is rejected.
+ * Drop invalid rows and sort by time. Duplicate timestamps with identical values collapse to one
+ * observation; duplicates with CONFLICTING values are excluded entirely (we cannot know which is
+ * right) and reported. A return <= -100% is impossible for a long-only curve and is rejected.
  * @param {unknown} raw
- * @returns {{ obs: Array<{ t: number, ret: number }>, received: number }}
+ * @returns {{ obs: Array<{ t: number, ret: number }>, received: number, exactDuplicates: number, conflictingTimestamps: number }}
  */
 export function cleanObservations(raw) {
   const list = Array.isArray(raw) ? raw : [];
-  /** @type {Map<number, number>} */
+  /** @type {Map<number, number[]>} */
   const byTime = new Map();
   for (const row of list) {
     if (!row || typeof row !== 'object') continue;
     const { ts, ret } = /** @type {{ ts?: unknown, ret?: unknown }} */ (row);
     const t = typeof ts === 'string' ? Date.parse(ts) : NaN;
     if (!Number.isFinite(t) || !isFiniteNumber(ret) || ret <= -1 || ret > 10) continue;
-    byTime.set(t, ret);
+    const seen = byTime.get(t);
+    if (seen) seen.push(ret);
+    else byTime.set(t, [ret]);
   }
-  const obs = [...byTime.entries()].sort((a, b) => a[0] - b[0]).map(([t, ret]) => ({ t, ret }));
-  return { obs, received: list.length };
+  let exactDuplicates = 0;
+  let conflictingTimestamps = 0;
+  /** @type {Array<{ t: number, ret: number }>} */
+  const obs = [];
+  for (const [t, rets] of byTime) {
+    if (rets.every((r) => Math.abs(r - rets[0]) < 1e-12)) {
+      exactDuplicates += rets.length - 1;
+      obs.push({ t, ret: rets[0] });
+    } else {
+      conflictingTimestamps++;
+    }
+  }
+  obs.sort((a, b) => a.t - b.t);
+  return { obs, received: list.length, exactDuplicates, conflictingTimestamps };
 }
 
 /** @param {number[]} xs */
@@ -107,9 +134,15 @@ export function totalReturn(rets) {
  */
 export function scoreTrader(observations, source, opts = {}) {
   const asOfMs = opts.asOf ? Date.parse(opts.asOf) : Date.now();
-  const { obs, received } = cleanObservations(observations);
+  const { obs, received, exactDuplicates, conflictingTimestamps } = cleanObservations(observations);
   const rets = obs.map((o) => o.ret);
-  const dataQuality = { received, valid: obs.length, dropped: received - obs.length };
+  const dataQuality = {
+    received,
+    valid: obs.length,
+    dropped: received - obs.length,
+    exactDuplicates,
+    conflictingTimestamps,
+  };
 
   /** @type {Flag[]} */
   const flags = [];
@@ -118,6 +151,21 @@ export function scoreTrader(observations, source, opts = {}) {
       code: 'invalid_values_dropped',
       severity: 'info',
       message: `${dataQuality.dropped} observation(s) had invalid timestamps or values and were excluded.`,
+    });
+  }
+
+  if (exactDuplicates > 0) {
+    flags.push({
+      code: 'duplicate_timestamps',
+      severity: 'info',
+      message: `${exactDuplicates} identical duplicate observation(s) were collapsed into one.`,
+    });
+  }
+  if (conflictingTimestamps > 0) {
+    flags.push({
+      code: 'conflicting_timestamps',
+      severity: 'caution',
+      message: `${conflictingTimestamps} timestamp(s) had conflicting values from the source and were excluded; reported history is inconsistent.`,
     });
   }
 
@@ -143,6 +191,8 @@ export function scoreTrader(observations, source, opts = {}) {
       version: SCORING_VERSION,
       status: obs.length === 0 ? 'unscorable' : 'insufficient_history',
       score: null,
+      rawScore: null,
+      caps: [],
       confidence: 'low',
       components: [],
       flags,
@@ -173,7 +223,15 @@ export function scoreTrader(observations, source, opts = {}) {
     rar.score = Math.round(clamp(((sharpe + 1) / 4) * 100, 0, 100));
     rar.explanation += ` Observed ${sharpe.toFixed(2)}; -1 maps to 0 and +3 maps to 100.`;
   } else {
-    rar.explanation += ' Not computable: returns have (near) zero variance.';
+    rar.explanation +=
+      ' Not computable: returns have (near) zero variance. Counted as 0 points, not ignored.';
+    flags.push({
+      code: 'no_variance',
+      severity: 'caution',
+      message:
+        'Returns show no meaningful variation, so risk-adjusted return cannot be computed. ' +
+        'This can indicate a dormant account or placeholder data.',
+    });
   }
 
   // 2. Drawdown severity: 0% drawdown -> 100, >=50% -> 0.
@@ -191,9 +249,12 @@ export function scoreTrader(observations, source, opts = {}) {
   // 3. Consistency: share of rolling 7-observation windows with a positive compounded return.
   let positive = 0;
   let windows = 0;
+  let bestWindow = -Infinity;
   for (let i = 0; i + WINDOW <= rets.length; i++) {
     windows++;
-    if (totalReturn(rets.slice(i, i + WINDOW)) > 0) positive++;
+    const w = totalReturn(rets.slice(i, i + WINDOW));
+    if (w > 0) positive++;
+    bestWindow = Math.max(bestWindow, w);
   }
   const share = windows ? positive / windows : 0;
   metrics.positiveWindowShare = share;
@@ -250,16 +311,46 @@ export function scoreTrader(observations, source, opts = {}) {
       message: `History is shorter than the ${TARGET_OBSERVATIONS}-observation target; treat results as less certain.`,
     });
   }
+  if (bestWindow >= 0.5 || ((periodDays ?? Infinity) <= 30 && (metrics.totalReturn ?? 0) >= 1)) {
+    flags.push({
+      code: 'large_short_interval_return',
+      severity: 'caution',
+      message:
+        `Unusually large return over a short interval (best ${WINDOW}-observation stretch ` +
+        `${(bestWindow * 100).toFixed(0)}%); performance outlier that warrants review.`,
+    });
+  }
   flags.push(...anomalyFlags(rets, metrics));
 
   const components = [rar, dd, cons, rel];
-  // Renormalize across components that could be computed. Drawdown, consistency and reliability
-  // are always computable here, so a missing risk-adjusted term only shifts weight, never zeroes it.
-  const usable = components.filter((c) => c.score !== null);
-  const wsum = usable.reduce((a, c) => a + c.weight, 0);
-  const score = Math.round(
-    usable.reduce((a, c) => a + /** @type {number} */ (c.score) * c.weight, 0) / wsum,
-  );
+  // A component that cannot be computed contributes 0 points. Weights are NOT renormalized:
+  // missing evidence must never raise a score.
+  const rawScore = Math.round(components.reduce((a, c) => a + (c.score ?? 0) * c.weight, 0));
+
+  // Provisional ceilings when evidence is thin or unverified. Reported, never hidden.
+  /** @type {Cap[]} */
+  const caps = [];
+  if (obs.length < CAPS.limitedHistory.below) {
+    caps.push({
+      code: 'limited_history',
+      limit: CAPS.limitedHistory.limit,
+      reason: `Only ${obs.length} valid observations (fewer than ${CAPS.limitedHistory.below}).`,
+    });
+  } else if (obs.length < CAPS.shortHistory.below) {
+    caps.push({
+      code: 'short_history',
+      limit: CAPS.shortHistory.limit,
+      reason: `Only ${obs.length} valid observations (fewer than ${CAPS.shortHistory.below}).`,
+    });
+  }
+  if (flags.some((f) => f.code === 'unusually_smooth_returns')) {
+    caps.push({
+      code: 'unverified_smoothness',
+      limit: CAPS.unverifiedSmoothness.limit,
+      reason: 'Unusually smooth returns are unverified against raw statements.',
+    });
+  }
+  const score = Math.min(rawScore, ...caps.map((c) => c.limit));
 
   /** @type {ScoreResult['confidence']} */
   let confidence = 'medium';
@@ -271,6 +362,8 @@ export function scoreTrader(observations, source, opts = {}) {
     version: SCORING_VERSION,
     status: 'scored',
     score,
+    rawScore,
+    caps,
     confidence,
     components,
     flags,
@@ -326,6 +419,13 @@ export function describeMethodology() {
       'A 0-100 descriptive score of an observed track record. Weights are provisional and have not ' +
       'been validated against historical outcomes. The score does not predict future profitability.',
     minimumObservations: MIN_OBSERVATIONS,
+    missingData:
+      'A component that cannot be computed contributes 0 points; weights are never renormalized, so missing evidence cannot raise a score. A series with fewer than the minimum observations receives no score (null), not a zero.',
+    caps: [
+      `Fewer than ${CAPS.limitedHistory.below} valid observations: score capped at ${CAPS.limitedHistory.limit}.`,
+      `Fewer than ${CAPS.shortHistory.below} valid observations: score capped at ${CAPS.shortHistory.limit}.`,
+      `Unusually smooth returns (unverified): score capped at ${CAPS.unverifiedSmoothness.limit}.`,
+    ],
     components: [
       {
         key: 'riskAdjustedReturn',
